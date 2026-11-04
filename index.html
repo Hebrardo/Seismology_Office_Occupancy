@@ -80,7 +80,7 @@ function defaultEnd(){
 }
 
 let S={start:ym(new Date(now.getFullYear(),now.getMonth()-6,1)),end:defaultEnd(),bureaux:[]};
-let dirty=false, timer=null, sb=null, lastSynced=null, lastRemoteSnapshot=null, shareToken=null, connectError='Not connected';
+let dirty=false, timer=null, sb=null, lastSynced=null, lastRemoteSnapshot=null, shareToken=null, connectError='Not connected', statusWarning='';
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const setStatus=t=>$('#st').textContent=t;
 
@@ -130,7 +130,7 @@ async function syncState(){
         await officeApi('save_settings',{start_month:S.start+'-01',end_month:S.end+'-01'});
         lastSynced=nowState;
         dirty=!!timer;
-        setStatus(dirty?'Pending changes…':'Synced ✓');
+        setStatus(dirty?'Pending changes…':(statusWarning||'Synced ✓'));
     }catch(e){
         console.error(e);
         setStatus('Sync error — retrying…');
@@ -170,7 +170,13 @@ async function loadSharedState(data=null){
     S.bureaux=officeRows.map(r=>({id:r.id,name:r.name||'',places:Number(r.places)||0,people:peopleByOffice.get(r.id)||[]}));
     if(settings&&settings.start_month)S.start=settings.start_month.slice(0,7);
     S.bureaux.forEach(syncPeople);   // trim / fill the person slots
+    sortOffices();
     const cur=currentMaps();
+
+    // warn if the database does not keep the Position (missing column, or office_api not updated)
+    const noColumn=personRows.length>0&&!('status' in personRows[0]);
+    const lost=[...prev.people.values()].some(x=>x.status&&cur.people.has(x.id)&&!cur.people.get(x.id).status);
+    if(noColumn||lost)statusWarning='⚠ Position not saved by the database: add the "status" column and update office_api';
 
     // "synced" = what the database really holds (people hidden by a smaller capacity are left untouched)
     lastSynced={offices:raw.offices,people:new Map([...raw.people].filter(([id])=>cur.people.has(id)))};
@@ -186,7 +192,7 @@ async function loadSharedState(data=null){
         setStatus('Pending changes…');
     }else{
         dirty=false;
-        setStatus(officeRows.length?'Synced ✓':'Shared database ready — add the first office');
+        setStatus(statusWarning||(officeRows.length?'Synced ✓':'Shared database ready — add the first office'));
     }
 }
 
@@ -311,7 +317,7 @@ const dayOptions=d=>{
     return l.map(n=>`<option value="${n}" ${v===n?'selected':''}>${n}</option>`).join('');
 };
 
-const STATUSES=['Internship','PhD','PostDoc','Permanent','Invited'];
+const STATUSES=['PostDoc','PhD','Internship'];
 const statusOptions=v=>{
     v=v||'';
     const l=[...STATUSES];
@@ -367,6 +373,17 @@ function card(b){
             `).join('')}
         </div>
     </section>`;
+}
+
+// offices in ascending order (321, 322, 323… ; numeric-aware), unnamed offices stay at the end
+function sortOffices(){
+    S.bureaux.sort((a,b)=>{
+        const an=(a.name||'').trim(), bn=(b.name||'').trim();
+        if(!an&&!bn)return 0;
+        if(!an)return 1;
+        if(!bn)return -1;
+        return an.localeCompare(bn,undefined,{numeric:true,sensitivity:'base'});
+    });
 }
 
 function syncPeople(b){
@@ -432,6 +449,14 @@ app.addEventListener('input',e=>{
 
 app.addEventListener('change',e=>{
     const f=e.target.dataset.f;
+
+    if(f==='name'&&!e.target.closest('[data-p]')){   // office name edited: re-sort the offices
+        const before=S.bureaux.map(x=>x.id).join();
+        sortOffices();
+        if(S.bureaux.map(x=>x.id).join()!==before)render();
+        persist();
+        return;
+    }
 
     if(f==='places'){          // once the field is left: rebuild rows + chart for the new capacity
         render();
