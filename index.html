@@ -26,14 +26,14 @@ input{font:inherit;color:var(--tx);background:var(--inp);border:1px solid var(--
 .leg{display:flex;gap:14px;flex-wrap:wrap;color:var(--mut);font-size:12px;margin:4px 0 10px}
 .leg i{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:5px;vertical-align:-1px}
 .rows{overflow-x:auto}
-.row{display:grid;grid-template-columns:minmax(130px,2fr) minmax(125px,1fr) minmax(125px,1fr) 70px;gap:6px;margin-bottom:5px;min-width:520px;align-items:center}
+.row{display:grid;grid-template-columns:minmax(130px,2fr) 118px minmax(125px,1fr) minmax(125px,1fr) 70px;gap:6px;margin-bottom:5px;min-width:650px;align-items:center}
 .row.h{color:var(--mut);font-size:12px}
 svg{width:100%;height:auto;display:block}
 .ok{color:var(--mut);font-size:12px}
 .warn{color:var(--full);font-weight:600}
 .person-cell{display:flex;align-items:center;gap:7px;min-width:0;}
 .person-dot{width:9px;height:9px;border-radius:50%;flex:0 0 9px;}
-select[data-f="days"]{
+select[data-f="days"],select[data-f="status"]{
     appearance:none;
     -webkit-appearance:none;
     width:100%;
@@ -50,8 +50,9 @@ select[data-f="days"]{
     background-repeat:no-repeat;
     background-position:right 9px center;
 }
-select[data-f="days"]:hover{border-color:var(--acc)}
-select[data-f="days"]:focus{outline:2px solid var(--acc);outline-offset:1px}
+select[data-f="days"]:hover,select[data-f="status"]:hover{border-color:var(--acc)}
+select[data-f="days"]:focus,select[data-f="status"]:focus{outline:2px solid var(--acc);outline-offset:1px}
+select[data-f="status"]{padding-left:6px;font-weight:500}
 </style>
 </head>
 <body>
@@ -72,7 +73,7 @@ select[data-f="days"]:focus{outline:2px solid var(--acc);outline-offset:1px}
 const ID=()=>Math.random().toString(36).slice(2,9), pad=n=>String(n).padStart(2,'0');
 const now=new Date(), ym=d=>d.getFullYear()+'-'+pad(d.getMonth()+1);
 const today=now.getFullYear()+'-'+pad(now.getMonth()+1)+'-'+pad(now.getDate());
-const P=(name,start,end,days)=>({id:ID(),name,start,end,days});
+const P=(name,start,end,days,status='')=>({id:ID(),name,start,end,days,status});
 
 function defaultEnd(){
     return ym(new Date(now.getFullYear(),now.getMonth()+12,1));
@@ -95,7 +96,7 @@ function persist(){
     dirty=true;
     setStatus('Pending changes…');
     clearTimeout(timer);
-    timer=setTimeout(syncState,1500);
+    timer=setTimeout(syncState,10000);
 }
 
 const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
@@ -105,7 +106,7 @@ function currentMaps(){
     S.bureaux.forEach((b,bi)=>{
         offices.set(b.id,{id:b.id,name:b.name||'',places:Number(b.places)||0,sort_order:bi});
         (b.people||[]).forEach((p,pi)=>people.set(p.id,{
-            id:p.id,office_id:b.id,name:p.name||'',
+            id:p.id,office_id:b.id,name:p.name||'',status:p.status||'',
             start_date:p.start||null,end_date:p.end||null,
             days:Number(p.days)||0,sort_order:pi
         }));
@@ -152,7 +153,7 @@ async function loadSharedState(data=null){
     for(const r of personRows){
         if(!peopleByOffice.has(r.office_id))peopleByOffice.set(r.office_id,[]);
         peopleByOffice.get(r.office_id).push({
-            id:r.id,name:r.name||'',start:r.start_date||'',end:r.end_date||'',days:Number(r.days??5)
+            id:r.id,name:r.name||'',status:r.status||'',start:r.start_date||'',end:r.end_date||'',days:Number(r.days??5)
         });
     }
     S.bureaux=officeRows.map(r=>({id:r.id,name:r.name||'',places:Number(r.places)||0,people:peopleByOffice.get(r.id)||[]}));
@@ -178,7 +179,10 @@ async function initShared(){
     }
     try{
         if(!window.supabase)throw new Error('Supabase library not loaded (network or ad blocker?)');
-        sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+        // keepalive lets a request finish even if the page is being closed
+        sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY,{
+            global:{fetch:(u,o={})=>fetch(u,{...o,keepalive:true})}
+        });
         await loadSharedState();
         setStatus('Shared database connected ✓');
         setInterval(pollSharedState,4000);
@@ -285,6 +289,15 @@ const dayOptions=d=>{
     return l.map(n=>`<option value="${n}" ${v===n?'selected':''}>${n}</option>`).join('');
 };
 
+const STATUSES=['PostDoc','PhD','Internship'];
+const statusOptions=v=>{
+    v=v||'';
+    const l=[...STATUSES];
+    if(v&&!l.includes(v))l.push(v);   // keeps any other value already stored
+    return '<option value=""'+(v===''?' selected':'')+'>—</option>'
+        +l.map(n=>`<option value="${esc(n)}" ${v===n?'selected':''}>${esc(n)}</option>`).join('');
+};
+
 function card(b){
     return `<section class="card" data-b="${b.id}">
         <div class="hd">
@@ -309,10 +322,10 @@ function card(b){
         <div class="rows">
             <div class="row h">
                 <div>Person</div>
+                <div>Position</div>
                 <div>Start date</div>
                 <div>End date (blank = ongoing)</div>
                 <div>Days/week</div>
-                <div></div>
             </div>
 
             ${b.people.map(p=>`
@@ -324,10 +337,10 @@ function card(b){
                         }"></span>
                         <input data-f="name" value="${esc(p.name)}" placeholder="First name Last name" aria-label="Name">
                     </div>
+                    <select data-f="status">${statusOptions(p.status)}</select>
                     <input type="date" data-f="start" value="${p.start}">
                     <input type="date" data-f="end" value="${p.end}">
                     <select data-f="days">${dayOptions(p.days)}</select>
-                    <div></div>
                 </div>
             `).join('')}
         </div>
@@ -446,6 +459,13 @@ $('#end').addEventListener('change',e=>{
         persist();
     }
 });
+
+// save immediately (without waiting for the 10 s delay) when the page is hidden or closed
+function flushNow(){
+    if(sb&&timer){clearTimeout(timer);syncState();}
+}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')flushNow();});
+window.addEventListener('pagehide',flushNow);
 
 render();
 initShared();
