@@ -79,7 +79,7 @@ function defaultEnd(){
 }
 
 let S={start:ym(new Date(now.getFullYear(),now.getMonth()-6,1)),end:defaultEnd(),bureaux:[]};
-let dirty=false, timer=null, sb=null, lastSynced=null, lastRemoteSnapshot=null, shareToken=null;
+let dirty=false, timer=null, sb=null, lastSynced=null, lastRemoteSnapshot=null, shareToken=null, connectError='Not connected';
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const setStatus=t=>$('#st').textContent=t;
 
@@ -91,11 +91,11 @@ async function officeApi(action,payload={}){
 }
 
 function persist(){
-    if(!sb){setStatus('Not connected — changes will not be saved');return;}
+    if(!sb){setStatus(connectError+' — changes will not be saved');return;}
     dirty=true;
     setStatus('Pending changes…');
     clearTimeout(timer);
-    timer=setTimeout(syncState,500);
+    timer=setTimeout(syncState,1500);
 }
 
 const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
@@ -171,8 +171,13 @@ async function initShared(){
     const SUPABASE_URL='https://rpeeeisbrsbascnqodgx.supabase.co';
     const SUPABASE_ANON_KEY='sb_publishable_Ua0aKecstYwE1ImWYCLqBg_jUgLN_wh';
     shareToken=new URLSearchParams(location.hash.slice(1)).get('access');
-    if(!shareToken){setStatus('Open the share link provided by the administrator');return;}
+    if(!shareToken){
+        connectError='No access token in the URL (the link must end with #access=...)';
+        setStatus(connectError);
+        return;
+    }
     try{
+        if(!window.supabase)throw new Error('Supabase library not loaded (network or ad blocker?)');
         sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
         await loadSharedState();
         setStatus('Shared database connected ✓');
@@ -180,12 +185,16 @@ async function initShared(){
     }catch(e){
         console.error(e);
         sb=null;
-        setStatus('Access denied or Supabase connection failed');
+        connectError='Connection failed: '+(e&&e.message?e.message:e);
+        setStatus(connectError+' — retrying…');
+        setTimeout(initShared,5000);
     }
 }
 
 async function pollSharedState(){
     if(!sb||dirty||timer)return;
+    const a=document.activeElement;   // don't redraw while the user is typing in a field
+    if(a&&$('#app').contains(a)&&/^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName))return;
     try{
         const data=await officeApi('load');
         if(JSON.stringify(data)!==lastRemoteSnapshot)await loadSharedState(data);
