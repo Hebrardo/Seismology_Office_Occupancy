@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Seismology Office Occupancy</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+--bg:#f4f6f9;--card:#fff;--tx:#1d2733;--mut:#667085;--bd:#dde2e8;--acc:#1f3864;--inp:#fffdf0;--full:#c0392b;--part:#f08c2e;--free:#5aa84a}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14181d;--card:#1d232b;--tx:#e8ecf1;--mut:#9aa6b2;--bd:#323b46;--acc:#9bb8ff;--inp:#272d36}}
+:root[data-theme="dark"]{--bg:#14181d;--card:#1d232b;--tx:#e8ecf1;--mut:#9aa6b2;--bd:#323b46;--acc:#9bb8ff;--inp:#272d36}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+html,body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.4 -apple-system,"Segoe UI",Roboto,Arial,sans-serif}
+main{max-width:860px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:0;color:var(--acc)}
+.top{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:6px}
+.tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0 14px}
+.tools label{color:var(--mut)}
+button{font:inherit;border:1px solid var(--bd);background:var(--card);color:var(--tx);border-radius:8px;padding:6px 12px;cursor:pointer}
+button.pri{background:var(--acc);color:var(--bg);border-color:var(--acc);font-weight:600}
+button.x{padding:2px 8px;color:var(--mut)}
+input{font:inherit;color:var(--tx);background:var(--inp);border:1px solid var(--bd);border-radius:6px;padding:5px 7px;min-width:0;width:100%;box-sizing:border-box}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-bottom:16px}
+.hd{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:8px}
+.hd .nm{width:90px;font-weight:700;font-size:16px}.hd .pl{width:64px}
+.hd span{color:var(--mut)}.sp{flex:1}
+.sum{color:var(--mut);margin:2px 0 8px}
+.leg{display:flex;gap:14px;flex-wrap:wrap;color:var(--mut);font-size:12px;margin:4px 0 10px}
+.leg i{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.rows{overflow-x:auto}
+.row{display:grid;grid-template-columns:minmax(130px,2fr) minmax(125px,1fr) minmax(125px,1fr) 70px 34px;gap:6px;margin-bottom:5px;min-width:520px;align-items:center}
+.row.h{color:var(--mut);font-size:12px}
+svg{width:100%;height:auto;display:block}
+.ok{color:var(--mut);font-size:12px}
+.warn{color:var(--full);font-weight:600}
+</style>
+</head>
+<body>
+<main>
+ <div class="top"><h1>🏢 Seismology Office Occupancy</h1><span class="ok" id="st"></span></div>
+ <div class="tools">
+  <button class="pri" data-act="addB">+ Ajouter un bureau</button>
+  <label for="start">Premier mois affiché</label><input type="month" id="start" style="width:auto">
+  <label for="end">Dernier mois affiché</label><input type="month" id="end" style="width:auto">
+  <button type="button" id="exportData">Exporter les données</button>
+  <button type="button" id="importButton">Importer un JSON</button>
+  <input type="file" id="importFile" accept="application/json,.json" hidden>
+ </div>
+ <div id="app"></div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+const ID=()=>Math.random().toString(36).slice(2,9), pad=n=>String(n).padStart(2,'0');
+const now=new Date(), ym=d=>d.getFullYear()+'-'+pad(d.getMonth()+1);
+const today=now.getFullYear()+'-'+pad(now.getMonth()+1)+'-'+pad(now.getDate());
+const P=(name,start,end,days)=>({id:ID(),name,start,end,days});
+function seed(){const start=ym(new Date(now.getFullYear(),now.getMonth()-6,1));return{start,end:ym(new Date(now.getFullYear(),now.getMonth()+17,1)),bureaux:[
+ {id:ID(),name:'321',places:5,people:[P('Marie Dupont','2025-09-01','',5),P('Paul Martin','2025-10-01','',2),P('Sophie Leroy','2025-10-01','',2.5),P('Jean Petit','2026-01-05','',3),P('Camille Roux','2025-01-06','2026-06-30',5)]},
+ {id:ID(),name:'322',places:3,people:[P('Lucas Bernard','2026-03-02','',5),P('Emma Girard','2026-09-01','2027-08-31',4),P('Hugo Fabre','2027-01-04','',1.5)]},
+ {id:ID(),name:'323',places:2,people:[P('Léa Moreau','2026-05-04','',3)]}]}}
+let S={start:ym(new Date(now.getFullYear(),now.getMonth()-6,1)),end:ym(new Date(now.getFullYear(),now.getMonth()+17,1)),bureaux:[]};
+let dirty=false, timer=null, supabase=null, lastSynced=null, remotePending=false, lastRemoteSnapshot=null, shareToken=null;
+const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const st=t=>$('#st').textContent=t;
+
+function cloneState(x){return JSON.parse(JSON.stringify(x))}
+function setStatus(t){st(t)}
+async function officeApi(action,payload={}){
+ const {data,error}=await supabase.rpc('office_api',{p_token:shareToken,p_action:action,p_payload:payload});
+ if(error)throw error;return data;
+}
+function persist(){
+ dirty=true;setStatus('Modification en attente…');clearTimeout(timer);
+ timer=setTimeout(syncState,500);
+}
+function same(a,b){return JSON.stringify(a)===JSON.stringify(b)}
+function currentMaps(){
+ const offices=new Map(), people=new Map();
+ S.bureaux.forEach((b,bi)=>{offices.set(b.id,{id:b.id,name:b.name||'',places:Number(b.places)||0,sort_order:bi});(b.people||[]).forEach((p,pi)=>people.set(p.id,{id:p.id,office_id:b.id,name:p.name||'',start_date:p.start||null,end_date:p.end||null,days:Number(p.days)||0,sort_order:pi}));});
+ return {offices,people};
+}
+async function syncState(){
+ timer=null;
+ if(!supabase)return;
+ const nowState=currentMaps(), old=lastSynced||{offices:new Map(),people:new Map()};
+ try{
+  const officeUp=[...nowState.offices.values()].filter(x=>!old.offices.has(x.id)||!same(x,old.offices.get(x.id)));
+  const peopleUp=[...nowState.people.values()].filter(x=>!old.people.has(x.id)||!same(x,old.people.get(x.id)));
+  const officeDel=[...old.offices.keys()].filter(id=>!nowState.offices.has(id));
+  const peopleDel=[...old.people.keys()].filter(id=>!nowState.people.has(id));
+  if(officeUp.length)await officeApi('upsert_offices',officeUp);
+  if(peopleUp.length)await officeApi('upsert_people',peopleUp);
+  if(peopleDel.length)await officeApi('delete_people',peopleDel);
+  if(officeDel.length)await officeApi('delete_offices',officeDel);
+  await officeApi('save_settings',{start_month:S.start+'-01',end_month:S.end+'-01'});
+  lastSynced=nowState;dirty=false;setStatus('Synchronisé ✓');
+  if(remotePending){remotePending=false;await loadSharedState();}
+ }catch(e){console.error(e);setStatus('Erreur de synchronisation — nouvelle tentative…');dirty=true;clearTimeout(timer);timer=setTimeout(syncState,5000);}
+}
+async function loadSharedState(data=null){
+ if(!data)data=await officeApi('load');
+ const officeRows=data.offices||[], personRows=data.people||[], settings=data.settings||null;
+ lastRemoteSnapshot=JSON.stringify(data);
+ if(officeRows.length===0){
+  S={start:ym(new Date(now.getFullYear(),now.getMonth()-6,1)),end:ym(new Date(now.getFullYear(),now.getMonth()+17,1)),bureaux:[]};
+  if(settings){S.start=(settings.start_month||'').slice(0,7)||S.start;S.end=(settings.end_month||'').slice(0,7)||S.end;}
+  lastSynced={offices:new Map(),people:new Map()};dirty=false;render();
+  setStatus('Base partagée prête — ajoutez le premier bureau');return;
+ }
+ const peopleByOffice=new Map();
+ for(const r of personRows){if(!peopleByOffice.has(r.office_id))peopleByOffice.set(r.office_id,[]);peopleByOffice.get(r.office_id).push({id:r.id,name:r.name||'',start:r.start_date||'',end:r.end_date||'',days:Number(r.days??5)});}
+ S.bureaux=officeRows.map(r=>({id:r.id,name:r.name||'',places:Number(r.places)||0,people:peopleByOffice.get(r.id)||[]}));
+ if(settings){S.start=(settings.start_month||'').slice(0,7)||S.start;S.end=(settings.end_month||'').slice(0,7)||S.end;}
+ lastSynced=currentMaps();dirty=false;render();setStatus('Données partagées chargées ✓');
+}
+async function initShared(){
+ const SUPABASE_URL='https://rpeeeisbrsbascnqodgx.supabase.co';
+ const SUPABASE_ANON_KEY='sb_publishable_Ua0aKecstYwE1ImWYCLqBg_jUgLN_wh';
+ shareToken=new URLSearchParams(location.hash.slice(1)).get('access');
+ if(!shareToken){setStatus('Ouvrez le lien de partage fourni par l’administrateur');return;}
+ if(SUPABASE_URL.startsWith('YOUR_')||SUPABASE_ANON_KEY.startsWith('YOUR_')){setStatus('Configuration Supabase nécessaire');return;}
+ try{
+  supabase=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+  await loadSharedState();
+  setStatus('Base partagée connectée ✓');
+  setInterval(pollSharedState,4000);
+ }catch(e){console.error(e);setStatus('Accès refusé ou connexion Supabase impossible');}
+}
+async function pollSharedState(){
+ if(!supabase||dirty||timer)return;
+ try{
+  const data=await officeApi('load');
+  const snapshot=JSON.stringify(data);
+  if(snapshot!==lastRemoteSnapshot)await loadSharedState(data);
+ }catch(e){console.error(e);setStatus('Erreur de synchronisation — vérifiez le lien partagé');}
+}
+
+const active=(p,key)=>p.start&&p.start<=key&&(!p.end||p.end>=key);
+function counts(b,key){let f=0,t=0;b.people.forEach(p=>{if(active(p,key)){(+p.days>=5)?f++:t++}});return{f,t,free:Math.max(0,b.places-f-t)}}
+function months(){const [y,m]=S.start.split('-').map(Number),[ey,em]=S.end.split('-').map(Number);const n=Math.max(1,Math.min(120,(ey-y)*12+em-m+1));return Array.from({length:n},(_,i)=>{const d=new Date(y,m-1+i,1);
+ return{key:ym(d)+'-01',label:d.toLocaleDateString('fr-FR',{month:'short',year:'2-digit'})}})}
+
+function chart(b){
+ const M=months(),W=600,H=230,L=30,B=34,T=10,R=6,pw=W-L-R,ph=H-B-T,bw=pw/M.length;
+ const data=M.map(m=>counts(b,m.key)), ymax=Math.max(1,b.places,...data.map(d=>d.f+d.t));
+ const step=ymax>12?Math.ceil(ymax/8):1,Y=v=>T+ph-v/ymax*ph;let s=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Occupation du bureau ${esc(b.name)}">`;
+ for(let v=0;v<=ymax;v+=step)s+=`<line x1="${L}" x2="${W-R}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--bd)"/><text x="${L-5}" y="${Y(v)+4}" text-anchor="end" font-size="10" fill="var(--mut)">${v}</text>`;
+ data.forEach((d,i)=>{const x=L+i*bw+bw*.06,w=bw*.88;let acc=0;
+  [['full',d.f,'Temps plein'],['part',d.t,'Temps partiel'],['free',d.free,'Places libres']].forEach(([c,v,n])=>{
+   if(v>0){s+=`<rect x="${x}" y="${Y(acc+v)}" width="${w}" height="${Y(acc)-Y(acc+v)}" fill="var(--${c})"><title>${M[i].label} — ${n} : ${v}</title></rect>`;acc+=v}});
+  if(i%2===0)s+=`<text x="${x+w/2}" y="${H-B+14}" text-anchor="middle" font-size="9.5" fill="var(--mut)">${M[i].label}</text>`});
+ const ti=M.findIndex((m,i)=>today>=m.key&&(i==M.length-1||today<M[i+1].key));
+ if(ti>=0)s+=`<line x1="${L+ti*bw+bw/2}" x2="${L+ti*bw+bw/2}" y1="${T}" y2="${T+ph}" stroke="var(--tx)" stroke-dasharray="3 3" opacity=".6"/><text x="${L+ti*bw+bw/2}" y="${H-5}" text-anchor="middle" font-size="9.5" fill="var(--tx)">aujourd’hui</text>`;
+ return s+'</svg>'}
+
+function summary(b){const c=counts(b,today),n=c.f+c.t;
+ let t=`Aujourd’hui : ${n} personne${n>1?'s':''} (${c.f} à temps plein, ${c.t} à temps partiel) · ${c.free} place${c.free>1?'s':''} libre${c.free>1?'s':''} sur ${b.places}`;
+ return n>b.places?`<span class="warn">${t} — surcharge (${n-b.places} en trop)</span>`:t}
+
+function card(b){return `<section class="card" data-b="${b.id}">
+ <div class="hd"><span>Bureau</span><input class="nm" data-f="name" value="${esc(b.name)}" aria-label="Nom du bureau">
+ <span>Places</span><input class="pl" type="number" min="0" step="1" data-f="places" value="${b.places}" aria-label="Nombre de places"><div class="sp"></div>
+ <button class="x" data-act="delB" title="Supprimer ce bureau">Supprimer</button></div>
+ <div class="sum">${summary(b)}</div>
+ <div class="leg"><span><i style="background:var(--full)"></i>Temps plein (5 j)</span><span><i style="background:var(--part)"></i>Temps partiel</span><span><i style="background:var(--free)"></i>Place libre</span></div>
+ <div class="ch">${chart(b)}</div>
+ <div class="rows"><div class="row h"><div>Personne</div><div>Début</div><div>Fin (vide = en cours)</div><div>Jours/sem.</div><div></div></div>
+ ${b.people.map(p=>`<div class="row" data-p="${p.id}"><input data-f="name" value="${esc(p.name)}" placeholder="Prénom Nom" aria-label="Nom"><input type="date" data-f="start" value="${p.start}" aria-label="Début"><input type="date" data-f="end" value="${p.end}" aria-label="Fin"><input type="number" min="0" max="5" step="0.5" data-f="days" value="${p.days}" aria-label="Jours par semaine"><button class="x" data-act="delP" title="Retirer">✕</button></div>`).join('')}
+ </div><button data-act="addP" style="margin-top:6px">+ Ajouter une personne</button></section>`}
+
+function render(){if(!S.end){const [y,m]=S.start.split('-').map(Number);S.end=ym(new Date(y,m-1+23,1))}
+  $('#start').value=S.start;$('#end').value=S.end;$('#app').innerHTML=S.bureaux.map(card).join('')||'<p class="ok">Aucun bureau. Cliquez sur « Ajouter un bureau ».</p>'}
+function refresh(b){const c=document.querySelector(`[data-b="${b.id}"]`);c.querySelector('.ch').innerHTML=chart(b);c.querySelector('.sum').innerHTML=summary(b)}
+
+const app=$('#app');
+app.addEventListener('input',e=>{const t=e.target,f=t.dataset.f;if(!f)return;const bc=t.closest('[data-b]'),b=S.bureaux.find(x=>x.id===bc.dataset.b);
+ const pr=t.closest('[data-p]');if(pr){const p=b.people.find(x=>x.id===pr.dataset.p);p[f]=f==='days'?(t.value===''?0:+t.value):t.value}
+ else b[f]=f==='places'?Math.max(0,+t.value||0):t.value;refresh(b);persist()});
+document.addEventListener('click',e=>{const a=e.target.closest('[data-act]');if(!a)return;const act=a.dataset.act,bc=a.closest('[data-b]'),b=bc&&S.bureaux.find(x=>x.id===bc.dataset.b);
+ 
+ if(act==='addB'){S.bureaux.push({id:ID(),name:'',places:1,people:[]})}
+ else if(act==='addP'){b.people.push(P('',today,'',5))}
+ else if(act==='delP'){const id=a.closest('[data-p]').dataset.p;b.people=b.people.filter(p=>p.id!==id)}
+ else if(act==='delB'){if(a.dataset.c!=='1'){a.dataset.c='1';a.textContent='Confirmer ?';return}S.bureaux=S.bureaux.filter(x=>x.id!==b.id)}
+ 
+ render();persist();if(act==='addB')app.lastElementChild.querySelector('.nm').focus()});
+$('#start').addEventListener('input',e=>{if(e.target.value){S.start=e.target.value;
+  if(S.end<S.start)S.end=S.start;render();persist()}});
+$('#end').addEventListener('input',e=>{if(e.target.value){S.end=e.target.value;
+  if(S.end<S.start)S.start=S.end;render();persist()}});
+$('#exportData').addEventListener('click',()=>{const blob=new Blob([JSON.stringify(S,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='office-occupancy-backup.json';a.click();URL.revokeObjectURL(a.href);});
+$('#importButton').addEventListener('click',()=>$('#importFile').click());
+$('#importFile').addEventListener('change',async e=>{const file=e.target.files[0];if(!file)return;try{const data=JSON.parse(await file.text());if(!Array.isArray(data.bureaux)||!data.start||!data.end)throw new Error('Format invalide');if(!confirm('Importer ces données et remplacer les bureaux actuellement partagés ?'))return;S={start:data.start,end:data.end,bureaux:data.bureaux};render();persist();}catch(err){alert('Import impossible : fichier JSON invalide.');}finally{e.target.value='';}});
+render();initShared();
+</script>
+</body>
+</html>
