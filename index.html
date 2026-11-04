@@ -149,6 +149,15 @@ async function loadSharedState(data=null){
     const settings=data.settings||null;
     lastRemoteSnapshot=JSON.stringify(data);
 
+    // rows exactly as they are stored in the database
+    const raw={offices:new Map(),people:new Map()};
+    officeRows.forEach(r=>raw.offices.set(r.id,{id:r.id,name:r.name||'',places:Number(r.places)||0,sort_order:Number(r.sort_order)||0}));
+    personRows.forEach(r=>raw.people.set(r.id,{
+        id:r.id,office_id:r.office_id,name:r.name||'',status:r.status||'',
+        start_date:r.start_date||null,end_date:r.end_date||null,
+        days:Number(r.days??5)||0,sort_order:Number(r.sort_order)||0
+    }));
+
     const peopleByOffice=new Map();
     for(const r of personRows){
         if(!peopleByOffice.has(r.office_id))peopleByOffice.set(r.office_id,[]);
@@ -156,16 +165,29 @@ async function loadSharedState(data=null){
             id:r.id,name:r.name||'',status:r.status||'',start:r.start_date||'',end:r.end_date||'',days:Number(r.days??5)
         });
     }
+
+    const prev=currentMaps();
     S.bureaux=officeRows.map(r=>({id:r.id,name:r.name||'',places:Number(r.places)||0,people:peopleByOffice.get(r.id)||[]}));
     if(settings&&settings.start_month)S.start=settings.start_month.slice(0,7);
+    S.bureaux.forEach(syncPeople);   // trim / fill the person slots
+    const cur=currentMaps();
 
-    // fill / trim the person slots BEFORE taking the "synced" snapshot,
-    // so empty placeholder rows are only sent to the database once edited
-    S.bureaux.forEach(syncPeople);
-    lastSynced=currentMaps();
-    dirty=false;
-    render();
-    setStatus(officeRows.length?'Shared data loaded ✓':'Shared database ready — add the first office');
+    // "synced" = what the database really holds (people hidden by a smaller capacity are left untouched)
+    lastSynced={offices:raw.offices,people:new Map([...raw.people].filter(([id])=>cur.people.has(id)))};
+    const differs=(a,b)=>[...a.values()].some(x=>!same(x,b.get(x.id)));
+    const pending=differs(cur.offices,lastSynced.offices)||differs(cur.people,lastSynced.people);
+    const changed=!same([...prev.offices],[...cur.offices])||!same([...prev.people],[...cur.people]);
+
+    if(changed)render();   // no redraw when the data is just the echo of our own save
+
+    if(pending){           // empty slots / ordering still to be written back to the database
+        dirty=true;
+        if(!timer)timer=setTimeout(syncState,1500);
+        setStatus('Pending changes…');
+    }else{
+        dirty=false;
+        setStatus(officeRows.length?'Synced ✓':'Shared database ready — add the first office');
+    }
 }
 
 async function initShared(){
@@ -350,8 +372,15 @@ function card(b){
 function syncPeople(b){
     b.places=Math.max(0,Math.floor(+b.places||0));
     b.people=b.people.slice(0,b.places);
+    // empty slots get a stable id (same on every device), so they never get duplicated
+    let k=b.people.length;
     while(b.people.length<b.places){
-        b.people.push(P('','','',5));
+        const used=new Set(b.people.map(p=>p.id));
+        while(used.has(b.id+'-s'+k))k++;
+        const slot=P('','','',5);
+        slot.id=b.id+'-s'+k;
+        b.people.push(slot);
+        k++;
     }
 }
 
