@@ -241,8 +241,11 @@ const active=(p,key)=>{
     if(!p.start) return false;
     const month=key.slice(0,7);
     const startMonth=p.start.slice(0,7);
-    const endMonth=p.end?p.end.slice(0,7):null;
-    return startMonth<=month&&(!endMonth||endMonth>=month);
+    if(startMonth>month) return false;            // début : le mois compte (même si c'est le 01)
+    if(!p.end) return true;                       // en cours
+    const endMonth=p.end.slice(0,7);
+    const endsOnFirst=p.end.slice(8,10)==='01';   // fin un 01 → le bureau est vide tout ce mois-là
+    return endsOnFirst ? endMonth>month : endMonth>=month;
 };
 
 function counts(b,key){
