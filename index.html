@@ -311,7 +311,7 @@ const dayOptions=d=>{
     return l.map(n=>`<option value="${n}" ${v===n?'selected':''}>${n}</option>`).join('');
 };
 
-const STATUSES=['PostDoc','PhD','Internship'];
+const STATUSES=['Internship','PhD','PostDoc','Permanent'];
 const statusOptions=v=>{
     v=v||'';
     const l=[...STATUSES];
